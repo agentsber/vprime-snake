@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Змейка</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0f1417;
+    --card: #172026;
+    --text: #e8f1f2;
+    --hint: #8a9ba3;
+    --accent: #19c3b1;
+    --accent-text: #ffffff;
+    --food: #ff5a5f;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior: none;
+    user-select: none; -webkit-user-select: none;
+  }
+  body {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+  }
+  header {
+    width: var(--board); display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; margin-bottom: 10px;
+  }
+  .stat { background: var(--card); border-radius: 12px; padding: 8px 14px; min-width: 96px; }
+  .stat small { display: block; color: var(--hint); font-size: 12px; }
+  .stat b { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .stat.right { text-align: right; }
+  #pauseBtn {
+    width: 44px; height: 44px; border: 0; border-radius: 12px;
+    background: var(--card); color: var(--text); font-size: 18px; cursor: pointer;
+  }
+  body { --board: min(calc(100vw - 24px), 480px, calc(100vh - 270px)); }
+  @supports (height: 100dvh) {
+    body { --board: min(calc(100vw - 24px), 480px, calc(100dvh - 270px)); }
+  }
+  #wrap { position: relative; width: var(--board); height: var(--board); }
+  canvas {
+    width: 100%; height: 100%; display: block;
+    border-radius: 16px; background: var(--card); touch-action: none;
+  }
+  .overlay {
+    position: absolute; inset: 0; border-radius: 16px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; padding: 20px; text-align: center;
+    background: rgba(0, 0, 0, .55); color: #fff;
+    backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  }
+  .overlay.hidden { display: none; }
+  .overlay h1 { margin: 0; font-size: 28px; }
+  .overlay p { margin: 0; opacity: .85; font-size: 15px; }
+  .overlay .record { color: #ffd166; font-weight: 600; }
+  button.primary {
+    margin-top: 6px; border: 0; border-radius: 12px; padding: 12px 32px;
+    background: var(--accent); color: var(--accent-text);
+    font-size: 17px; font-weight: 600; cursor: pointer;
+  }
+  .pad {
+    display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(2, 52px);
+    gap: 8px; margin-top: 14px;
+  }
+  .pad button {
+    border: 0; border-radius: 14px; background: var(--card); color: var(--text);
+    font-size: 22px; cursor: pointer; touch-action: manipulation;
+  }
+  .pad button:active { background: var(--accent); color: var(--accent-text); }
+  .pad .up { grid-column: 2; grid-row: 1; }
+  .pad .left { grid-column: 1; grid-row: 2; }
+  .pad .down { grid-column: 2; grid-row: 2; }
+  .pad .right { grid-column: 3; grid-row: 2; }
+  .hint { color: var(--hint); font-size: 13px; margin-top: 10px; text-align: center; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="stat"><small>Счёт</small><b id="score">0</b></div>
+    <button id="pauseBtn" aria-label="Пауза">⏸</button>
+    <div class="stat right"><small>Рекорд</small><b id="best">0</b></div>
+  </header>
+  <div id="wrap">
+    <canvas id="board"></canvas>
+    <div class="overlay" id="overlay">
+      <h1 id="ovTitle">🐍 Змейка</h1>
+      <p id="ovText">Свайпайте по полю или жмите стрелки</p>
+      <p id="ovRecord" class="record"></p>
+      <button class="primary" id="ovBtn">Играть</button>
+    </div>
+  </div>
+
+  <div class="pad">
+    <button class="up" data-dir="up" aria-label="Вверх">▲</button>
+    <button class="left" data-dir="left" aria-label="Влево">◀</button>
+    <button class="down" data-dir="down" aria-label="Вниз">▼</button>
+    <button class="right" data-dir="right" aria-label="Вправо">▶</button>
+  </div>
+  <div class="hint">Ешьте яблоки и не врезайтесь в стены и в себя</div>
+
+<script>
+(() => {
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const N = 20;
+  const BEST_KEY = "vprime-snake-best";
+  const DIRS = {
+    up: { x: 0, y: -1 }, down: { x: 0, y: 1 },
+    left: { x: -1, y: 0 }, right: { x: 1, y: 0 },
+  };
+
+  const canvas = document.getElementById("board");
+  const ctx = canvas.getContext("2d");
+  const $ = (id) => document.getElementById(id);
+  const scoreEl = $("score"), bestEl = $("best");
+  const overlay = $("overlay"), ovTitle = $("ovTitle"), ovText = $("ovText"),
+        ovRecord = $("ovRecord"), ovBtn = $("ovBtn"), pauseBtn = $("pauseBtn");
+
+  let colors = {};
+  let cell = 0;
+  let snake, dir, queue, food, score, stepMs, acc, lastT = 0, eatPulse = 0;
+  let state = "ready"; // ready | running | paused | over
+  let best = 0;
+  try { best = parseInt(localStorage.getItem(BEST_KEY), 10) || 0; } catch (e) {}
+
+  function haptic(kind, value) {
+    try {
+      if (!tg || !tg.HapticFeedback) return;
+      if (kind === "impact") tg.HapticFeedback.impactOccurred(value);
+      else if (kind === "notify") tg.HapticFeedback.notificationOccurred(value);
+      else tg.HapticFeedback.selectionChanged();
+    } catch (e) {}
+  }
+
+  function applyTheme() {
+    const p = (tg && tg.themeParams) || {};
+    const s = document.documentElement.style;
+    const map = {
+      bg_color: "--bg", secondary_bg_color: "--card", text_color: "--text",
+      hint_color: "--hint", button_color: "--accent", button_text_color: "--accent-text",
+    };
+    for (const k in map) if (p[k]) s.setProperty(map[k], p[k]);
+    const cs = getComputedStyle(document.documentElement);
+    colors = {
+      card: cs.getPropertyValue("--card").trim(),
+      text: cs.getPropertyValue("--text").trim(),
+      accent: cs.getPropertyValue("--accent").trim(),
+      food: cs.getPropertyValue("--food").trim(),
+    };
+  }
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const size = Math.round(canvas.clientWidth * dpr);
+    if (size > 0 && canvas.width !== size) {
+      canvas.width = canvas.height = size;
+    }
+    cell = canvas.width / N;
+  }
+
+  function reset() {
+    const mid = Math.floor(N / 2);
+    snake = [{ x: mid, y: mid }, { x: mid - 1, y: mid }, { x: mid - 2, y: mid }];
+    dir = DIRS.right;
+    queue = [];
+    score = 0;
+    stepMs = 140;
+    acc = 0;
+    food = placeFood();
+    scoreEl.textContent = "0";
+  }
+
+  function placeFood() {
+    const free = [];
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++)
+        if (!snake.some((s) => s.x === x && s.y === y)) free.push({ x, y });
+    return free.length ? free[Math.floor(Math.random() * free.length)] : null;
+  }
+
+  function setDir(name) {
+    const d = DIRS[name];
+    if (!d) return;
+    if (state === "ready" || state === "over") { start(); }
+    if (state === "paused") { resume(); }
+    const lastDir = queue.length ? queue[queue.length - 1] : dir;
+    if (d === lastDir || (d.x === -lastDir.x && d.y === -lastDir.y)) return;
+    if (queue.length < 3) queue.push(d);
+  }
+
+  function step() {
+    if (queue.length) dir = queue.shift();
+    const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+    if (head.x < 0 || head.y < 0 || head.x >= N || head.y >= N) return gameOver();
+
+    const eating = food && head.x === food.x && head.y === food.y;
+    // Without eating the tail moves away this step, so its cell is free.
+    const body = eating ? snake : snake.slice(0, -1);
+    if (body.some((s) => s.x === head.x && s.y === head.y)) return gameOver();
+
+    snake.unshift(head);
+    if (eating) {
+      score++;
+      scoreEl.textContent = score;
+      stepMs = Math.max(65, 140 - score * 2.5);
+      eatPulse = 1;
+      haptic("impact", "light");
+      food = placeFood();
+      if (!food) return gameOver(true);
+    } else {
+      snake.pop();
+    }
+  }
+
+  function showOverlay(title, text, btn, record) {
+    ovTitle.textContent = title;
+    ovText.textContent = text;
+    ovRecord.textContent = record || "";
+    ovBtn.textContent = btn;
+    overlay.classList.remove("hidden");
+  }
+
+  function start() {
+    reset();
+    state = "running";
+    overlay.classList.add("hidden");
+    pauseBtn.textContent = "⏸";
+  }
+
+  function pause() {
+    if (state !== "running") return;
+    state = "paused";
+    pauseBtn.textContent = "▶";
+    showOverlay("Пауза", "Счёт: " + score, "Продолжить");
+  }
+
+  function resume() {
+    if (state !== "paused") return;
+    state = "running";
+    acc = 0;
+    pauseBtn.textContent = "⏸";
+    overlay.classList.add("hidden");
+  }
+
+  function gameOver(won) {
+    state = "over";
+    let record = "";
+    if (score > best) {
+      best = score;
+      bestEl.textContent = best;
+      try { localStorage.setItem(BEST_KEY, String(best)); } catch (e) {}
+      if (score > 0) record = "🏆 Новый рекорд!";
+    }
+    haptic("notify", won ? "success" : "error");
+    showOverlay(won ? "Победа! 🎉" : "Игра окончена", "Счёт: " + score, "Играть ещё", record);
+  }
+
+  // ---------- Drawing ----------
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function draw(t) {
+    resize();
+    const W = canvas.width;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = colors.card;
+    ctx.fillRect(0, 0, W, W);
+
+    ctx.fillStyle = colors.text;
+    ctx.globalAlpha = 0.04;
+    for (let y = 0; y < N; y++)
+      for (let x = (y % 2); x < N; x += 2)
+        ctx.fillRect(x * cell, y * cell, cell, cell);
+    ctx.globalAlpha = 1;
+
+    if (food) {
+      const pulse = 1 + 0.08 * Math.sin(t / 180);
+      const cx = (food.x + 0.5) * cell, cy = (food.y + 0.5) * cell;
+      ctx.fillStyle = colors.food;
+      ctx.beginPath();
+      ctx.arc(cx, cy, cell * 0.36 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#4caf50";
+      ctx.beginPath();
+      ctx.ellipse(cx + cell * 0.1, cy - cell * 0.36, cell * 0.12, cell * 0.06, -0.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const len = snake.length;
+    const pad = cell * 0.08;
+    for (let i = len - 1; i >= 0; i--) {
+      const s = snake[i];
+      let grow = i === 0 ? eatPulse * cell * 0.08 : 0;
+      ctx.globalAlpha = 1 - (i / Math.max(len, 1)) * 0.5;
+      ctx.fillStyle = colors.accent;
+      roundRect(s.x * cell + pad - grow, s.y * cell + pad - grow,
+                cell - pad * 2 + grow * 2, cell - pad * 2 + grow * 2, cell * 0.28);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    const h = snake[0];
+    const hx = (h.x + 0.5) * cell, hy = (h.y + 0.5) * cell;
+    const px = -dir.y, py = dir.x;
+    ctx.fillStyle = colors.card;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(hx + dir.x * cell * 0.15 + px * side * cell * 0.18,
+              hy + dir.y * cell * 0.15 + py * side * cell * 0.18,
+              cell * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    eatPulse = Math.max(0, eatPulse - 0.08);
+  }
+
+  function loop(t) {
+    if (state === "running") {
+      acc += Math.min(t - lastT, 250);
+      while (acc >= stepMs && state === "running") {
+        acc -= stepMs;
+        step();
+      }
+    }
+    lastT = t;
+    draw(t);
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- Input ----------
+  const KEYS = {
+    ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+    KeyW: "up", KeyS: "down", KeyA: "left", KeyD: "right",
+  };
+  document.addEventListener("keydown", (e) => {
+    if (KEYS[e.code]) { e.preventDefault(); setDir(KEYS[e.code]); }
+    else if (e.code === "Space" || e.code === "KeyP") {
+      e.preventDefault();
+      if (state === "running") pause();
+      else if (state === "paused") resume();
+      else start();
+    }
+  });
+
+  let touch = null;
+  const surface = $("wrap");
+  surface.addEventListener("touchstart", (e) => {
+    const p = e.touches[0];
+    touch = { x: p.clientX, y: p.clientY };
+  }, { passive: true });
+  surface.addEventListener("touchmove", (e) => {
+    if (!touch) return;
+    e.preventDefault();
+    const p = e.touches[0];
+    const dx = p.clientX - touch.x, dy = p.clientY - touch.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+    if (state === "running" || state === "paused") {
+      setDir(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up"));
+    }
+    touch = { x: p.clientX, y: p.clientY };
+  }, { passive: false });
+  surface.addEventListener("touchend", () => { touch = null; });
+
+  document.querySelectorAll(".pad button").forEach((b) => {
+    b.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      haptic("select");
+      setDir(b.dataset.dir);
+    });
+  });
+
+  ovBtn.addEventListener("click", () => {
+    if (state === "paused") resume(); else start();
+  });
+  pauseBtn.addEventListener("click", () => {
+    if (state === "running") pause(); else if (state === "paused") resume();
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) pause(); });
+  window.addEventListener("resize", resize);
+
+  // ---------- Init ----------
+  if (tg) {
+    try { tg.ready(); } catch (e) {}
+    try { tg.expand(); } catch (e) {}
+    try { if (tg.disableVerticalSwipes) tg.disableVerticalSwipes(); } catch (e) {}
+    try { tg.onEvent("themeChanged", applyTheme); } catch (e) {}
+    try { tg.onEvent("viewportChanged", resize); } catch (e) {}
+  }
+  applyTheme();
+  bestEl.textContent = best;
+  reset();
+  requestAnimationFrame((t) => { lastT = t; loop(t); });
+})();
+</script>
+</body>
+</html>
