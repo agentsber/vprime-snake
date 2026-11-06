@@ -1,4 +1,4 @@
-"""Бот @zmeikabot для VPrime: отвечает на /start кнопкой запуска игры «Змейка».
+﻿"""Бот @zmeikabot для VPrime: отвечает на /start кнопкой запуска игры «Змейка».
 
 Запуск:  set VPRIME_BOT_TOKEN=<токен>  затем  python bot.py
 """
@@ -14,7 +14,7 @@ if not TOKEN:
     sys.exit("Задайте переменную окружения VPRIME_BOT_TOKEN")
 
 API = f"https://vprime.online/mvp/bot{TOKEN}"
-GAME_URL = "https://agentsber.github.io/vprime-snake/"
+GAME_URL = "https://agentsber.github.io/vprime-snake/?v=3"
 
 
 def call(method, **params):
